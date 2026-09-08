@@ -18,6 +18,18 @@ jobs:
           MY_IP=$(curl -s https://checkip.amazonaws.com)
           aws ec2 authorize-security-group-ingress --region ap-south-1 \
             --group-id "${{ secrets.FE_SG }}" --protocol tcp --port 22 --cidr "${MY_IP}/32" || true
+      - name: Backup current dashboard
+        env:
+          KEY: ${{ secrets.SSH_KEY_PEM }}
+        run: |
+          echo "$KEY" > /tmp/ssh_key && chmod 600 /tmp/ssh_key
+          ssh -o StrictHostKeyChecking=no -i /tmp/ssh_key ubuntu@${{ secrets.FE_PUBLIC_IP }} "cp ~/cronvault-frontend/dashboard.html ~/cronvault-frontend/dashboard.html.bak || true"
+
+      - name: Ensure target directory exists
+        run: ssh -o StrictHostKeyChecking=no -i /tmp/ssh_key ubuntu@${{ secrets.FE_PUBLIC_IP }} "mkdir -p ~/cronvault-frontend" || true
+        env:
+          KEY: ${{ secrets.SSH_KEY_PEM }}
+
       - name: Deploy dashboard-redesigned.html
         uses: appleboy/scp-action@v0.1.6
         with:
@@ -25,6 +37,6 @@ jobs:
           username: ubuntu
           key: ${{ secrets.SSH_KEY_PEM }}
           source: "dashboard-redesigned.html"
-          target: "~/cronvault-frontend/dashboard.html"
+          target: "~/cronvault-frontend/"
       - name: Verify HTTPS
         run: curl -sf -o /dev/null -w '%{http_code}\n' https://cronvault.duckdns.org/
