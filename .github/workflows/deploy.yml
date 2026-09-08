@@ -45,9 +45,9 @@ jobs:
           command_timeout: 10m
           script: |
             cd ~/cronvault-frontend || exit 1
-            docker compose down
-            docker compose build --no-cache
-            docker compose up -d
+            docker compose -f docker-compose.frontend.yml down
+            docker compose -f docker-compose.frontend.yml build --no-cache
+            docker compose up -f docker-compose.frontend.yml -d
 
       - name: Verify HTTPS
         run: curl -sf -o /dev/null -w '%{http_code}\n' https://cronvault.duckdns.org/
