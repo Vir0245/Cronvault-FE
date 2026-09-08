@@ -1,0 +1,30 @@
+name: CronVault FE — Frontend Only (from Vir0245/Cronvault-FE)
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy-frontend:
+    runs-on: ubuntu-latest
+    env:
+      FE_PUBLIC_IP: ${{ secrets.FE_PUBLIC_IP }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: Vir0245/Cronvault-FE
+      - name: Refresh frontend SSH SG
+        run: |
+          MY_IP=$(curl -s https://checkip.amazonaws.com)
+          aws ec2 authorize-security-group-ingress --region ap-south-1 \
+            --group-id "${{ secrets.FE_SG }}" --protocol tcp --port 22 --cidr "${MY_IP}/32" || true
+      - name: Deploy dashboard-redesigned.html
+        uses: appleboy/scp-action@v0.1.6
+        with:
+          host: ${{ secrets.FE_PUBLIC_IP }}
+          username: ubuntu
+          key: ${{ secrets.SSH_KEY_PEM }}
+          source: "dashboard-redesigned.html"
+          target: "~/cronvault-frontend/dashboard.html"
+      - name: Verify HTTPS
+        run: curl -sf -o /dev/null -w '%{http_code}\n' https://cronvault.duckdns.org/
