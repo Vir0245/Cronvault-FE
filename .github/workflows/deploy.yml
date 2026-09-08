@@ -1,42 +1,87 @@
-name: CronVault FE — Frontend Only (from Vir0245/Cronvault-FE)
+name: CronVault FE — Deploy with Backup
 
 on:
   push:
     branches: [main]
+    # Optional: only run when frontend files change
+    # paths:
+    #   - '**'
 
 jobs:
   deploy-frontend:
     runs-on: ubuntu-latest
     env:
-      FE_PUBLIC_IP: ${{ secrets.FE_PUBLIC_IP }}
+      AWS_REGION: ap-south-1
+      HOST: ubuntu@${{ secrets.FE_PUBLIC_IP }}
+      REMOTE_PATH: ~/cronvault-frontend
+
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout frontend repo
+        uses: actions/checkout@v4
         with:
           repository: Vir0245/Cronvault-FE
-      - name: Refresh frontend SSH SG
-        run: |
-          MY_IP=$(curl -s https://checkip.amazonaws.com)
-          aws ec2 authorize-security-group-ingress --region ap-south-1 \
-            --group-id "${{ secrets.FE_SG }}" --protocol tcp --port 22 --cidr "${MY_IP}/32" || true
-      - name: Backup current dashboard
+
+      - name: Setup SSH key
         env:
           KEY: ${{ secrets.SSH_KEY_PEM }}
         run: |
           echo "$KEY" > /tmp/ssh_key && chmod 600 /tmp/ssh_key
-          ssh -o StrictHostKeyChecking=no -i /tmp/ssh_key ubuntu@${{ secrets.FE_PUBLIC_IP }} "cp ~/cronvault-frontend/dashboard.html ~/cronvault-frontend/dashboard.html.bak || true"
+          mkdir -p ~/.ssh
+          ssh-keyscan -H ${{ secrets.FE_PUBLIC_IP }} >> ~/.ssh/known_hosts
+
+      - name: Open SSH in Security Group
+        run: |
+          MY_IP=$(curl -s https://checkip.amazonaws.com)
+          echo "MY_IP=$MY_IP" >> $GITHUB_ENV
+          aws ec2 authorize-security-group-ingress \
+            --region $AWS_REGION \
+            --group-id ${{ secrets.FE_SG }} \
+            --protocol tcp --port 22 --cidr "$MY_IP/32" || true
+
+      - name: Backup current frontend
+        run: |
+          TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+          BACKUP_PATH="${REMOTE_PATH}.backup.${TIMESTAMP}"
+          echo "BACKUP_PATH=$BACKUP_PATH" >> $GITHUB_ENV
+
+          ssh -i /tmp/ssh_key -o StrictHostKeyChecking=no $HOST \
+            "cp -r $REMOTE_PATH $BACKUP_PATH || echo 'No existing folder to backup'"
 
       - name: Ensure target directory exists
-        run: ssh -o StrictHostKeyChecking=no -i /tmp/ssh_key ubuntu@${{ secrets.FE_PUBLIC_IP }} "mkdir -p ~/cronvault-frontend" || true
-        env:
-          KEY: ${{ secrets.SSH_KEY_PEM }}
+        run: |
+          ssh -i /tmp/ssh_key -o StrictHostKeyChecking=no $HOST \
+            "mkdir -p $REMOTE_PATH"
 
-      - name: Deploy dashboard-redesigned.html
-        uses: appleboy/scp-action@v0.1.6
+      - name: Deploy all frontend files
+        uses: appleboy/scp-action@v0.1.7
         with:
           host: ${{ secrets.FE_PUBLIC_IP }}
           username: ubuntu
           key: ${{ secrets.SSH_KEY_PEM }}
-          source: "dashboard-redesigned.html"
-          target: "~/cronvault-frontend/"
-      - name: Verify HTTPS
-        run: curl -sf -o /dev/null -w '%{http_code}\n' https://cronvault.duckdns.org/
+          source: "./*"
+          target: "${{ env.REMOTE_PATH }}/"
+          strip_components: 0
+
+      - name: Verify deployment
+        run: |
+          sleep 2
+          STATUS=$(curl -sf -o /dev/null -w '%{http_code}' https://cronvault.duckdns.org/)
+          echo "HTTP Status: $STATUS"
+          if [ "$STATUS" != "200" ]; then
+            echo "Deployment verification failed!"
+            exit 1
+          fi
+
+      - name: Cleanup old backups (keep last 5)
+        if: always()
+        run: |
+          ssh -i /tmp/ssh_key -o StrictHostKeyChecking=no $HOST \
+            "ls -td ${REMOTE_PATH}.backup.* 2>/dev/null | tail -n +6 | xargs -r rm -rf || true"
+
+      - name: Close SSH in Security Group
+        if: always()
+        run: |
+          aws ec2 revoke-security-group-ingress \
+            --region $AWS_REGION \
+            --group-id ${{ secrets.FE_SG }} \
+            --protocol tcp --port 22 --cidr "${{ env.MY_IP }}/32" || true
