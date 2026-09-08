@@ -34,6 +34,20 @@ jobs:
           key: ${{ secrets.SSH_KEY_PEM }}
           source: "dashboard-redesigned.html"
           target: "~/cronvault-frontend/"
+          
+      - name: Rebuild and Restart Frontend Containers
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.FE_PUBLIC_IP }}
+          username: ubuntu
+          key: ${{ secrets.SSH_KEY_PEM }}
+          timeout: 30s
+          command_timeout: 10m
+          script: |
+            cd ~/cronvault-frontend || exit 1
+            docker compose down
+            docker compose build --no-cache
+            docker compose up -d
 
       - name: Verify HTTPS
         run: curl -sf -o /dev/null -w '%{http_code}\n' https://cronvault.duckdns.org/
