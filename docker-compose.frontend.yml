@@ -1,0 +1,13 @@
+services:
+  nginx:
+    image: nginx:1.27
+    container_name: cronvault-frontend
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./site:/usr/share/nginx/html:ro        # dashboard.html -> index.html
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - /etc/letsencrypt:/etc/letsencrypt:ro    # TLS certs (issued by certbot on host)
+      - ./letsencrypt:/var/www/letsencrypt:ro   # ACME HTTP-01 webroot
+    restart: unless-stopped
