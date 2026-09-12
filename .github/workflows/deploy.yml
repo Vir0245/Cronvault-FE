@@ -1,4 +1,4 @@
-name: CronVault FE — Frontend Only (from Vir0245/Cronvault-FE)
+name: CronVault FE — Frontend ECR Deploy
 
 on:
   push:
@@ -14,39 +14,56 @@ jobs:
         with:
           repository: Vir0245/Cronvault-FE
 
-      - name: Backup current dashboard
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ap-south-1
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and Push to ECR
         env:
-          KEY: ${{ secrets.SSH_KEY_PEM }}
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          ECR_REPOSITORY: cronvault-frontend
+          IMAGE_TAG: latest
         run: |
-          echo "$KEY" > /tmp/ssh_key && chmod 600 /tmp/ssh_key
-          ssh -o StrictHostKeyChecking=no -i /tmp/ssh_key ubuntu@${{ secrets.FE_PUBLIC_IP }} "cp ~/cronvault-frontend/dashboard.html ~/cronvault-frontend/dashboard.html.bak || true"
+          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
 
-      - name: Ensure target directory exists
-        run: ssh -o StrictHostKeyChecking=no -i /tmp/ssh_key ubuntu@${{ secrets.FE_PUBLIC_IP }} "mkdir -p ~/cronvault-frontend" || true
-        env:
-          KEY: ${{ secrets.SSH_KEY_PEM }}
-
-      - name: Deploy dashboard-redesigned.html
-        uses: appleboy/scp-action@v0.1.6
+      - name: Deploy docker-compose file
+        uses: appleboy/scp-action@v0.1.7
         with:
           host: ${{ secrets.FE_PUBLIC_IP }}
           username: ubuntu
           key: ${{ secrets.SSH_KEY_PEM }}
-          source: "dashboard-redesigned.html"
+          source: "docker-compose.frontend.yml"
           target: "~/cronvault-frontend/"
-          
-      - name: Rebuild and Restart Frontend Containers
+
+      - name: Pull and Restart Frontend Containers
         uses: appleboy/ssh-action@v1.0.3
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          AWS_REGION: ap-south-1
         with:
           host: ${{ secrets.FE_PUBLIC_IP }}
           username: ubuntu
           key: ${{ secrets.SSH_KEY_PEM }}
           timeout: 30s
           command_timeout: 10m
+          envs: ECR_REGISTRY,AWS_REGION
           script: |
             cd ~/cronvault-frontend || exit 1
+            
+            # Authenticate the EC2 instance with ECR
+            aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $ECR_REGISTRY
+            
+            # Pull the new image and recreate the container
+            docker compose -f docker-compose.frontend.yml pull
             docker compose -f docker-compose.frontend.yml down
-            docker compose if docker-compose.frontend.yml build --no-cache
             docker compose -f docker-compose.frontend.yml up -d
 
       - name: Verify HTTPS
